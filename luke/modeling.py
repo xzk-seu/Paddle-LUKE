@@ -398,13 +398,13 @@ class LukeForReadingComprehension(LukePreTrainedModel):
 
     def forward(
             self,
-            input_ids=None,
-            attention_mask=None,
-            token_type_ids=None,
+            word_ids=None,
+            word_attention_mask=None,
+            word_segment_ids=None,
             position_ids=None,
             entity_ids=None,
             entity_attention_mask=None,
-            entity_token_type_ids=None,
+            entity_segment_ids=None,
             entity_position_ids=None,
             head_mask=None,
             inputs_embeds=None,
@@ -414,13 +414,13 @@ class LukeForReadingComprehension(LukePreTrainedModel):
             return_dict=None,
     ):
         outputs = self.luke(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
+            input_ids=word_ids,
+            attention_mask=word_attention_mask,
+            token_type_ids=word_segment_ids,
             position_ids=position_ids,
             entity_ids=entity_ids,
             entity_attention_mask=entity_attention_mask,
-            entity_token_type_ids=entity_token_type_ids,
+            entity_token_type_ids=entity_segment_ids,
             entity_position_ids=entity_position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -429,7 +429,7 @@ class LukeForReadingComprehension(LukePreTrainedModel):
             return_dict=True,
         )
 
-        seq_len = input_ids.shape[1]
+        seq_len = word_ids.shape[1]
         word_hidden_states = outputs["last_hidden_state"][:, : seq_len, :]
         logits = self.qa_outputs(word_hidden_states)
         start_logits, end_logits = logits.split(2, axis=-1)
