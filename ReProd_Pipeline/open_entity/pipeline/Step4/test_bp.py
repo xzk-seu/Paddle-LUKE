@@ -14,7 +14,7 @@ def pd_train_some_iters(
         max_iter=2
 ):
     model = PDModel.from_pretrained(
-        "../../../../pretrained_model/luke-large-finetuned-open-entity",
+        "../../../../weight/pd/luke-large-finetuned-open-entity",
     )
     model.eval()
     criterion = paddle.nn.functional.binary_cross_entropy_with_logits

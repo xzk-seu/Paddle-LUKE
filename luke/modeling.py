@@ -11,6 +11,7 @@ __all__ = [
     'LukePreTrainedModel',
     'LukeModel',
     'LukeForEntityClassification',
+    'LukeForReadingComprehension'
 ]
 
 
@@ -373,6 +374,72 @@ class LukeForEntityClassification(LukePreTrainedModel):
             attentions=outputs["attentions"],
         )
         # return loss, logits, outputs.hidden_states, outputs.entity_hidden_states, outputs.attentions
+
+
+class LukeForReadingComprehension(LukePreTrainedModel):
+    def __init__(self,
+                 luke: LukeModel,
+                 hidden_size=1024,
+                 num_labels=9,
+                 hidden_dropout_prob=0.1,
+                 initializer_range=0.02
+                 ):
+        super().__init__()
+        self.initializer_range = initializer_range
+
+        self.luke = luke
+        self.num_labels = num_labels
+        self.dropout = nn.Dropout(hidden_dropout_prob)
+        # self.classifier = nn.Linear(hidden_size, num_labels)
+        self.qa_outputs = nn.Linear(hidden_size, 2)
+
+        # Initialize weights and apply final processing
+        self.apply(self.init_weights)
+
+    def forward(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            token_type_ids=None,
+            position_ids=None,
+            entity_ids=None,
+            entity_attention_mask=None,
+            entity_token_type_ids=None,
+            entity_position_ids=None,
+            head_mask=None,
+            inputs_embeds=None,
+            labels=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
+    ):
+        outputs = self.luke(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            entity_ids=entity_ids,
+            entity_attention_mask=entity_attention_mask,
+            entity_token_type_ids=entity_token_type_ids,
+            entity_position_ids=entity_position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        seq_len = input_ids.shape[1]
+        word_hidden_states = outputs["last_hidden_state"][:, : seq_len, :]
+        logits = self.qa_outputs(word_hidden_states)
+        start_logits, end_logits = logits.split(2, axis=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
+
+        # feature_vector = outputs["entity_last_hidden_state"][:, 0, :]
+        # feature_vector = self.dropout(feature_vector)
+        # logits = self.classifier(feature_vector)
+        return start_logits, end_logits
 
 
 class LukeEmbeddings(Layer):

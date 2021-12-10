@@ -1,20 +1,25 @@
 import datetime
+import logging
 import os
 import random
 import time
+import joblib
 
 import numpy as np
 import paddle
 from paddle.io import DataLoader
 from paddle.optimizer import AdamW
-from reprod_log import ReprodLogger
+from paddlenlp.metrics import squad
 
-import utils
-from Dataset_utils.OpenEntityDataset import OpenEntityDataset
-from Dataset_utils.collate_fn import collate_fn
-from luke.modeling import LukeForEntityClassification
+from Dataset_utils.SquadDataset import SquadDataset
 from luke.tokenizer import LukeTokenizer
-from paddlenlp.metrics.glue import AccuracyAndF1
+from task.squad.utils.dataset import SquadV1Processor
+from task.squad.utils.feature import convert_examples_to_features
+from task.squad.utils.utils import MetricLogger, SmoothedValue
+from task.utils.entity_vocab import EntityVocab
+from task.squad.utils.wiki_link_db import WikiLinkDB
+
+logger = logging.getLogger(__name__)
 
 
 def train_one_epoch(
@@ -27,12 +32,12 @@ def train_one_epoch(
         print_freq,
         scaler=None, ):
     model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter="  ")
     metric_logger.add_meter(
-        "lr", utils.SmoothedValue(
+        "lr", SmoothedValue(
             window_size=1, fmt="{value}"))
     metric_logger.add_meter(
-        "sentence/s", utils.SmoothedValue(
+        "sentence/s", SmoothedValue(
             window_size=10, fmt="{value}"))
 
     header = "Epoch: [{}]".format(epoch)
@@ -66,7 +71,7 @@ def train_one_epoch(
 def evaluate(model, criterion, data_loader, metric, print_freq=100):
     model.eval()
     metric.reset()
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter="  ")
     header = "Test:"
     with paddle.no_grad():
         for batch in metric_logger.log_every(data_loader, print_freq, header):
@@ -80,8 +85,8 @@ def evaluate(model, criterion, data_loader, metric, print_freq=100):
 
             metric_logger.update(loss=loss.item())
 
-            logits = logits.reshape((-1, ))
-            labels = labels.reshape((-1, ))
+            logits = logits.reshape((-1,))
+            labels = labels.reshape((-1,))
             positive = (logits > 0).astype(paddle.int64)
             correct = (positive == labels).astype(np.float32)
 
@@ -90,6 +95,7 @@ def evaluate(model, criterion, data_loader, metric, print_freq=100):
             metric.update(correct)
 
         # acc_global_avg = metric.accumulate()
+        squad.squad_evaluate([], [])
         pd_accuracy, pd_precision, pd_recall, pd_f1, _ = metric.accumulate()
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -201,15 +207,104 @@ def main(args):
     return best_accuracy
 
 
+def load_examples(args, tokenizer, is_evaluate=False):
+    # if args.local_rank not in (-1, 0) and not evaluate:
+    #     torch.distributed.barrier()
+
+    # if args.with_negative:
+    #     processor = SquadV2Processor()
+    # else:
+    #     processor = SquadV1Processor()
+    processor = SquadV1Processor()
+
+    if is_evaluate:
+        examples = processor.get_dev_examples(args.data_dir)
+    else:
+        examples = processor.get_train_examples(args.data_dir)
+
+    # bert_model_name = args.model_config.bert_model_name
+
+    # segment_b_id = 1
+    # add_extra_sep_token = False
+    # if "roberta" in bert_model_name:
+    #     segment_b_id = 0
+    #     add_extra_sep_token = True
+    segment_b_id = 0
+    add_extra_sep_token = True
+
+    args.entity_vocab = EntityVocab(args.entity_vocab_tsv)
+
+    args.wiki_link_db = WikiLinkDB(args.wiki_link_db_file)
+    args.model_redirect_mappings = joblib.load(args.model_redirects_file)
+    args.link_redirect_mappings = joblib.load(args.link_redirects_file)
+
+    logger.info("Creating features from the dataset...")
+    features = convert_examples_to_features(
+        examples=examples,
+        tokenizer=tokenizer,
+        entity_vocab=args.entity_vocab,
+        wiki_link_db=args.wiki_link_db,
+        model_redirect_mappings=args.model_redirect_mappings,
+        link_redirect_mappings=args.link_redirect_mappings,
+        max_seq_length=args.max_seq_length,
+        max_mention_length=args.max_mention_length,
+        doc_stride=args.doc_stride,
+        max_query_length=args.max_query_length,
+        min_mention_link_prob=args.min_mention_link_prob,
+        segment_b_id=segment_b_id,
+        add_extra_sep_token=add_extra_sep_token,
+        is_training=not is_evaluate,
+    )
+
+    # if args.local_rank == 0 and not is_evaluate:
+    #     torch.distributed.barrier()
+
+    def collate_fn(batch):
+        def pad_sequence(x, padding_value):
+            max_seq_len = max([len(i) for i in x])
+            res = [item + [padding_value] * (max_seq_len - len(item)) for item in x]
+            return res
+
+        def create_padded_sequence(attr_name, padding_value):
+            x = [getattr(o[1], attr_name) for o in batch]
+            res = pad_sequence(x, padding_value)
+            res = paddle.to_tensor(res)
+            return res
+
+        ret = dict(
+            word_ids=create_padded_sequence("word_ids", tokenizer.pad_token_id),
+            word_attention_mask=create_padded_sequence("word_attention_mask", 0),
+            word_segment_ids=create_padded_sequence("word_segment_ids", 0),
+            entity_ids=create_padded_sequence("entity_ids", 0)[:, : args.max_entity_length],
+            entity_attention_mask=create_padded_sequence("entity_attention_mask", 0)[:, : args.max_entity_length],
+            entity_position_ids=create_padded_sequence("entity_position_ids", -1)[:, : args.max_entity_length, :],
+            entity_segment_ids=create_padded_sequence("entity_segment_ids", 0)[:, : args.max_entity_length],
+        )
+        # if args.no_entity:
+        #     ret["entity_attention_mask"].fill_(0)
+
+        if is_evaluate:
+            ret["example_indices"] = paddle.to_tensor([o[0] for o in batch], dtype=paddle.int64)
+        else:
+            ret["start_positions"] = paddle.to_tensor([o[1].start_positions[0] for o in batch], dtype=paddle.int64)
+            ret["end_positions"] = paddle.to_tensor([o[1].end_positions[0] for o in batch], dtype=paddle.int64)
+
+        return ret
+    dataset = SquadDataset(features)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn)
+
+    return dataloader, examples, features, processor
+
+
 def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Paddle Entity Classification Training", add_help=add_help)
+        description="Paddle Squad Training", add_help=add_help)
     parser.add_argument(
         "--task_name",
-        default="open entity",
-        help="the name of the glue task to train on.")
+        default="squad",
+        help="the name of the task to train on.")
     parser.add_argument(
         "--model_name_or_path",
         default="./pd/luke-large-finetuned-open-entity",
@@ -270,18 +365,19 @@ def get_args_parser(add_help=True):
         "--fp16",
         action="store_true",
         help="whether or not mixed precision training")
-    parser.add_argument(
-        "--data_set_dir",
-        default="./dataset/OpenEntity"
-    )
-    parser.add_argument(
-        "--train_file",
-        default="train.json"
-    )
-    parser.add_argument(
-        "--test_file",
-        default="test.json"
-    )
+
+    parser.add_argument("--data_dir", default="./dataset/squad")
+    parser.add_argument("--entity_vocab_tsv", default="weight/pd/luke-for-squad/entity_vocab.tsv")
+    parser.add_argument("--max_seq_length", default=512)
+    parser.add_argument("--max_mention_length", default=30)
+    parser.add_argument("--doc_stride", default=128)
+    parser.add_argument("--max_query_length", default=64)
+    parser.add_argument("--min_mention_link_prob", default=0.01)
+    parser.add_argument("--max_entity_length", default=128)
+
+    parser.add_argument("--link-redirects-file", default="enwiki_20160305_redirects.pkl")
+    parser.add_argument("--model-redirects-file", default="enwiki_20181220_redirects.pkl")
+    parser.add_argument("--wiki-link-db-file", default="enwiki_20160305.pkl")
 
     return parser
 
@@ -289,6 +385,3 @@ def get_args_parser(add_help=True):
 if __name__ == "__main__":
     args = get_args_parser().parse_args()
     acc = main(args)
-    reprod_logger = ReprodLogger()
-    reprod_logger.add("acc", np.array([acc]))
-    reprod_logger.save("train_align_paddle.npy")

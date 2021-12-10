@@ -15,7 +15,7 @@ if __name__ == "__main__":
     reprod_logger = ReprodLogger()
 
     model = Model.from_pretrained(
-        "../../../../pretrained_model/luke-large-finetuned-open-entity",
+        "../../../../weight/pd/luke-large-finetuned-open-entity",
     )
     model.eval()
     # read or gen fake dataset

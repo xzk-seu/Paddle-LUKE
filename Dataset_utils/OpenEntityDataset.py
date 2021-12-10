@@ -32,7 +32,8 @@ class OpenEntityDataset(Dataset):
         if tokenizer:
             self.tokenizer = tokenizer
         else:
-            self.tokenizer = LukeTokenizer.from_pretrained("../pretrained_model/luke-large-finetuned-open-entity")
+            self.tokenizer = LukeTokenizer.from_pretrained(
+                "../weight/pd/luke-large-finetuned-open-entity")
 
     def __getitem__(self, idx):
         example = self.data[idx]

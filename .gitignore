@@ -1,8 +1,8 @@
 /torch_model/
 /dataset/OpenEntity
 /param_trans/
-/pretrained_model/luke-large-finetuned-open-entity/
-/pretrained_model/luke-base/
+/weight/pd/luke-large-finetuned-open-entity/
+/weight/pd/luke-base/
 /ReProd_Pipeline/open_entity/pipeline/Step5/luke_torch/outputs/
 /ReProd_Pipeline/open_entity/pipeline/Step5/luke_paddle/outputs/
 /.idea

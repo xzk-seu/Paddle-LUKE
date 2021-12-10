@@ -3,13 +3,13 @@ Paddle-LUKE
 
 
 ```bash
-cd run/open_entity
+cd task/open_entity
 python -m paddle.distributed.launch --gpus "0" train.py \
     --model_name_or_path bert-base-uncased \
     --batch_size 32 \
     --num_warmup_steps 158 \
     --data_set_dir ../../dataset/OpenEntity \
-    --model_name_or_path ../../pretrained_model/luke-large-finetuned-open-entity \
+    --model_name_or_path ../../pd/luke-large-finetuned-open-entity \
     --test_only
 ```
 
@@ -30,3 +30,7 @@ python -m paddle.distributed.launch --gpus "0" train.py \
       2. LukeIntermediate
       3. LukeOutput
 4. LukePooler
+
+
+1.Open Entity测试集F1=78.2，
+SQuAD1.1测试集F1=95.4，EM=90.2（见论文Table1 & Table5）

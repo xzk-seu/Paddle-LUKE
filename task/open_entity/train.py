@@ -215,7 +215,7 @@ def get_args_parser(add_help=True):
         help="the name of the glue task to train on.")
     parser.add_argument(
         "--model_name_or_path",
-        default="./pretrained_model/luke-large-finetuned-open-entity",
+        default="./pd/luke-large-finetuned-open-entity",
         help="path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument("--device", default="gpu", help="device")
@@ -231,7 +231,7 @@ def get_args_parser(add_help=True):
         "--num_train_epochs",
         default=3,
         type=int,
-        help="number of total epochs to run")
+        help="number of total epochs to task")
     parser.add_argument(
         "--workers",
         default=0,

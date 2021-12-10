@@ -252,7 +252,7 @@ def get_args_parser(add_help=True):
         "--num_train_epochs",
         default=3,
         type=int,
-        help="number of total epochs to run")
+        help="number of total epochs to task")
     parser.add_argument(
         "--workers",
         default=0,
