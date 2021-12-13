@@ -86,58 +86,43 @@ def train_one_epoch(
 
 
 @paddle.no_grad()
-def evaluate(args, model, prefix="", pre_load_data=None):
-    if pre_load_data:
-        dataloader, examples, features, processor = pre_load_data
-    else:
-        dataloader, examples, features, processor = load_examples(args, is_evaluate=True)
-    all_results = []
-    for batch in tqdm(dataloader, desc="eval"):
-        model.eval()
-        inputs = {k: paddle.to_tensor(v) for k, v in batch.items() if k != "example_indices"}
-        outputs = model(**inputs)
+def evaluate(model, args):
+    data_loader, _, _, _ = load_examples(args, is_evaluate=True)
+    model.eval()
 
-        for i, example_index in enumerate(batch["example_indices"]):
-            eval_feature = features[example_index.item()]
-            unique_id = int(eval_feature.unique_id)
-            start_logits, end_logits = [o[i].detach().cpu().tolist() for o in outputs]
-            all_results.append(Result(unique_id, start_logits, end_logits))
+    all_start_logits = []
+    all_end_logits = []
+    tic_eval = time.time()
 
-    output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(prefix))
-    output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(prefix))
-    if args.with_negative:
-        output_null_log_odds_file = os.path.join(args.output_dir, "null_odds_{}.json".format(prefix))
-    else:
-        output_null_log_odds_file = None
+    for batch in data_loader:
+        # input_ids, token_type_ids = batch
+        start_logits_tensor, end_logits_tensor = model(**batch)
 
-    # do_lower_case = False
-    # if isinstance(args.tokenizer, BertTokenizer):
-    #     do_lower_case = args.tokenizer.basic_tokenizer.do_lower_case
-    do_lower_case = True
+        for idx in range(start_logits_tensor.shape[0]):
+            if len(all_start_logits) % 1000 == 0 and len(all_start_logits):
+                print("Processing example: %d" % len(all_start_logits))
+                print('time per 1000:', time.time() - tic_eval)
+                tic_eval = time.time()
 
-    write_predictions(
-        examples,
-        features,
-        all_results,
-        args.n_best_size,
-        args.max_answer_length,
-        do_lower_case,
-        output_prediction_file,
-        output_nbest_file,
-        output_null_log_odds_file,
-        False,
-        args.with_negative,
-        args.null_score_diff_threshold,
-        args.tokenizer,
-    )
+            all_start_logits.append(start_logits_tensor.numpy()[idx])
+            all_end_logits.append(end_logits_tensor.numpy()[idx])
 
-    return evaluate_on_squad(
-        SQUAD_EVAL_OPTS(
-            os.path.join(args.data_dir, processor.dev_file),
-            pred_file=output_prediction_file,
-            na_prob_file=output_null_log_odds_file,
-        )
-    )
+    all_predictions, all_nbest_json, scores_diff_json = compute_prediction(
+        data_loader.dataset.data, data_loader.dataset.new_data,
+        (all_start_logits, all_end_logits), args.version_2_with_negative,
+        args.n_best_size, args.max_answer_length,
+        args.null_score_diff_threshold)
+
+    # Can also write all_nbest_json and scores_diff_json files if needed
+    with open('prediction.json', "w", encoding='utf-8') as writer:
+        writer.write(
+            json.dumps(
+                all_predictions, ensure_ascii=False, indent=4) + "\n")
+
+    squad_evaluate(
+        examples=data_loader.dataset.data,
+        preds=all_predictions,
+        na_probs=scores_diff_json)
 
 
 def set_seed(seed=42):
@@ -274,19 +259,6 @@ def load_examples(args, is_evaluate=False):
             res = paddle.to_tensor(res)
             return res
 
-        def create_padded_sequence_for_entity_position_ids():
-            padding_value = -1
-            x = [getattr(o[1], "entity_position_ids") for o in batch]  # 32 * 2 * 30
-            max_row = max([len(i) for i in x])
-            max_col = max([len(j) for i in x for j in i])
-            res = [[item + [padding_value] * (max_col - len(item)) for item in i] for i in x]
-
-            padding_seq = [padding_value] * max_col
-            res = [i + [padding_seq] * (max_row - len(i)) for i in res]
-
-            res = paddle.to_tensor(res)
-            return res
-
         tokenizer = args.tokenizer
         ret = dict(
             word_ids=create_padded_sequence("word_ids", tokenizer.pad_token_id),
@@ -294,8 +266,7 @@ def load_examples(args, is_evaluate=False):
             word_segment_ids=create_padded_sequence("word_segment_ids", 0),
             entity_ids=create_padded_sequence("entity_ids", 0)[:, : args.max_entity_length],
             entity_attention_mask=create_padded_sequence("entity_attention_mask", 0)[:, : args.max_entity_length],
-            # entity_position_ids=create_padded_sequence("entity_position_ids", -1)[:, : args.max_entity_length, :],
-            entity_position_ids=create_padded_sequence_for_entity_position_ids()[:, : args.max_entity_length, :],
+            entity_position_ids=create_padded_sequence("entity_position_ids", -1)[:, : args.max_entity_length, :],
             entity_segment_ids=create_padded_sequence("entity_segment_ids", 0)[:, : args.max_entity_length],
         )
         # if args.no_entity:
@@ -396,21 +367,6 @@ def get_args_parser(add_help=True):
     parser.add_argument("--link-redirects-file", default="enwiki_20160305_redirects.pkl")
     parser.add_argument("--model-redirects-file", default="enwiki_20181220_redirects.pkl")
     parser.add_argument("--wiki-link-db-file", default="enwiki_20160305.pkl")
-
-    parser.add_argument(
-        "--n_best_size",
-        type=int,
-        default=20,
-        help="The total number of n-best predictions to generate in the nbest_predictions.json output file."
-    )
-    parser.add_argument(
-        "--null_score_diff_threshold",
-        type=float,
-        default=0.0,
-        help="If null_score - best_non_null is greater than the threshold predict null."
-    )
-    parser.add_argument(
-        "--max_answer_length", type=int, default=30, help="Max answer length.")
 
     return parser
 

@@ -7,3 +7,9 @@
 /ReProd_Pipeline/open_entity/pipeline/Step5/luke_paddle/outputs/
 /.idea
 **/__pycache__/
+/weight/pd/luke-for-squad/
+/wiki_pkl/luke_squad_wikipedia_data/
+/weight/hg/
+/weight/torch/
+/dataset/squad_mini/
+/dataset/squad/

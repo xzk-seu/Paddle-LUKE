@@ -34,3 +34,8 @@ python -m paddle.distributed.launch --gpus "0" train.py \
 
 1.Open Entity测试集F1=78.2，
 SQuAD1.1测试集F1=95.4，EM=90.2（见论文Table1 & Table5）
+
+
+SQuad结果
+![img_3.png](task/squad/img_3.png)
+#复现失败
